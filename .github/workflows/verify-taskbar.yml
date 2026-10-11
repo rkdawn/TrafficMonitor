@@ -1,0 +1,62 @@
+name: 验证任务栏修复
+
+on:
+  push:
+    branches: [fix/win11-tray-overlap]
+  pull_request:
+    branches: [fix/win11-tray-overlap]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '待验证的分支或提交；留空则验证当前分支'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: microsoft/setup-msbuild@v2
+      - name: 运行真实 Win32 窗口回归测试
+        shell: pwsh
+        run: ./tests/Run-TaskbarPositionTests.ps1
+      - name: 编译完整版 x64
+        working-directory: TrafficMonitor
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD;$env:PATH"
+          msbuild ../TrafficMonitor.sln '-p:Configuration=Release' -p:Platform=x64 -p:PlatformToolset=v143 -m -v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: 整理不含个人配置的完整版
+        shell: pwsh
+        run: |
+          $out = 'Bin/package-full'
+          New-Item -ItemType Directory -Path $out | Out-Null
+          foreach ($name in @('TrafficMonitor.exe', 'OpenHardwareMonitorApi.dll', 'LibreHardwareMonitorLib.dll')) {
+            Copy-Item -LiteralPath "Bin/x64/Release/$name" -Destination $out
+          }
+          Copy-Item -LiteralPath 'TrafficMonitor/language' -Destination $out -Recurse
+          Copy-Item -LiteralPath 'LICENSE' -Destination $out
+          Set-Content -LiteralPath "$out/global_cfg.ini" -Value "[config]`nportable_mode=true" -Encoding utf8BOM
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrafficMonitor-taskbar-fix-full-x64
+          path: Bin/package-full/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: taskbar-regression-results
+          path: |
+            Bin/TaskbarPositionTests/**/test.log
+            Bin/TaskbarPositionTests/**/build.log
+            Bin/TaskbarPositionTests/**/result.json
+          retention-days: 30

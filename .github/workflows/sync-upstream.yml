@@ -1,0 +1,48 @@
+name: 同步 TrafficMonitor 上游
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'rkdawn/TrafficMonitor'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      REPAIR_BRANCH: fix/win11-tray-overlap
+    steps:
+      - name: 同步干净的 master 并提出修复分支更新
+        shell: bash
+        run: |
+          set -euo pipefail
+          #只更新上游镜像分支，不强推、不重置修复分支。
+          gh api --method POST "repos/$REPO/merge-upstream" -f branch=master
+          encoded_base="${REPAIR_BRANCH//\//%2F}"
+          ahead=$(gh api "repos/$REPO/compare/$encoded_base...master" --jq .ahead_by)
+          if [ "$ahead" -eq 0 ]; then
+            printf '上游已同步，修复分支没有待合入的上游提交。\n' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          number=$(gh pr list --repo "$REPO" --base "$REPAIR_BRANCH" --head master --state open --json number --jq '.[0].number // empty')
+          if [ -z "$number" ]; then
+            gh pr create --repo "$REPO" --base "$REPAIR_BRANCH" --head master \
+              --title 'chore: 同步 TrafficMonitor 上游更新' \
+              --body $'此请求仅将原作者上游更新合入个人修复分支。请先检查冲突、回归测试和完整构建结果，再手动合并；不会自动部署到电脑，也不会更新第三方插件。\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+            number=$(gh pr list --repo "$REPO" --base "$REPAIR_BRANCH" --head master --state open --json number --jq '.[0].number')
+          fi
+          #GITHUB_TOKEN 创建的PR不会自动触发PR工作流，显式验证合并结果。
+          gh workflow run verify-taskbar.yml --repo "$REPO" --ref "$REPAIR_BRANCH" -f "ref=refs/pull/$number/merge"
+          printf '上游已同步到 master；合并请求 #%s 已提交验证，未自动合并或部署。\n' "$number" >> "$GITHUB_STEP_SUMMARY"
