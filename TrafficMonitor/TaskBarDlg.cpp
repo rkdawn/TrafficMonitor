@@ -468,7 +468,9 @@ bool CTaskBarDlg::AdjustWindowPos(bool force_adjust)
     if (force_adjust)
         ResetTaskbarPos();
 
-    ::GetWindowRect(m_hTaskbar, m_rcTaskbar);   //获得任务栏的矩形区域
+    //任务栏重建期间不使用失效矩形定位，等待主窗口重新创建任务栏窗口。
+    if (!::GetWindowRect(m_hTaskbar, m_rcTaskbar) || m_rcTaskbar.IsRectEmpty())
+        return false;
 
     static bool last_taskbar_on_top_or_bottom;
     CheckTaskbarOnTopOrBottom();
